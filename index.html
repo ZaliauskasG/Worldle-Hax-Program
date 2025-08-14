@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Anagram Finder (up to 6 letters)</title>
+<style>
+  :root{
+    --bg:#0b1220; --panel:#0f172a; --muted:#9ca3af; --text:#e5e7eb; --accent:#22d3ee;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; font-family:ui-sans-serif,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
+    color:var(--text);
+    background: radial-gradient(1000px 500px at 80% -10%, #1f2937 0%, transparent 60%),
+                linear-gradient(180deg,#0b1220,#0f172a);
+    padding:16px;
+  }
+  .wrap{max-width:920px;margin:0 auto;display:grid;gap:12px}
+  .card{background:rgba(15,23,42,.8);border:1px solid rgba(255,255,255,.08);
+        border-radius:16px;padding:14px;backdrop-filter:blur(6px)}
+  h1{margin:0 0 8px;font-size:1.25rem}
+  .row{display:grid;grid-template-columns:1fr;gap:10px}
+  @media(min-width:760px){ .row{grid-template-columns:2fr 1.2fr} }
+  label{font-size:.9rem;color:var(--muted)}
+  input[type="text"]{width:100%;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,.08);
+                     background:#0b1220;color:var(--text);font-size:1.05rem;letter-spacing:.12em;text-transform:lowercase}
+  .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;
+        background:#0b1220;border:1px solid rgba(255,255,255,.08);color:var(--muted);font-size:.9rem}
+  .btn{appearance:none;border:0;border-radius:12px;padding:10px 12px;font-weight:700;cursor:pointer;
+       background:var(--accent);color:#00222a}
+  .muted{color:var(--muted);font-size:.9rem}
+  .status{font-variant-numeric:tabular-nums}
+  ul{list-style:none;margin:8px 0 0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px}
+  li{background:#0b1220;border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:8px;text-align:center}
+  .small{font-size:.85rem}
+  .ok{color:#22c55e}.warn{color:#fbbf24}.bad{color:#f87171}
+  .spacer{height:6px}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>🔤 Anagram Finder (exact letters, up to 6)</h1>
+      <div class="muted">
+        Type up to six letters (e.g., <code>t a r e s</code>). The app finds words in your <code>words.txt</code> that use
+        <b>exactly</b> those letters — no more, no less.
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="card">
+        <label for="letters">Your letters (max 6):</label>
+        <input id="letters" autocomplete="off" placeholder="e.g., t a r e s" maxlength="11" />
+        <div class="controls" style="margin-top:8px">
+          <div class="pill status" id="status">Dictionary: <span id="dictStatus">loading…</span></div>
+          <div class="pill">Matches: <span id="count">0</span></div>
+          <button class="btn" id="clearBtn" type="button">Clear</button>
+        </div>
+        <div class="spacer"></div>
+        <ul id="results"></ul>
+      </div>
+
+      <div class="card">
+        <div class="muted">Dictionary source</div>
+        <div style="height:6px"></div>
+        <div class="controls">
+          <button class="btn" id="tryFetchBtn" type="button">Load <code>assets/words.txt</code></button>
+          <span class="muted small">or</span>
+          <input type="file" id="fileInput" accept=".txt" />
+        </div>
+        <div style="height:8px"></div>
+        <div class="muted small">
+          Tip: the app only indexes words of length <b>2–6</b> (faster). If your file is large (e.g., dwyl’s 466k words),
+          this keeps it snappy in the browser.
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // ----- Elements -----
+  const lettersEl = document.getElementById('letters');
+  const resultsEl = document.getElementById('results');
+  const countEl = document.getElementById('count');
+  const dictStatusEl = document.getElementById('dictStatus');
+  const clearBtn = document.getElementById('clearBtn');
+  const tryFetchBtn = document.getElementById('tryFetchBtn');
+  const fileInput = document.getElementById('fileInput');
+
+  // ----- State / Index -----
+  // index[length][signature] -> array of words
+  const index = new Map(); // length -> Map(sig -> [words])
+  const LEN_MIN = 2, LEN_MAX = 6;
+  let totalIndexed = 0;
+
+  function normalizeWord(w) {
+    // letters only, lower case
+    const m = w.toLowerCase().match(/^[a-z]+$/);
+    return m ? w.toLowerCase() : null;
+  }
+  function signature(s) {
+    return s.split('').sort().join('');
+  }
+  function ensureLenMap(len) {
+    if (!index.has(len)) index.set(len, new Map());
+    return index.get(len);
+  }
+  function addWordToIndex(word) {
+    if (!word) return;
+    const len = word.length;
+    if (len < LEN_MIN || len > LEN_MAX) return;
+    const sig = signature(word);
+    const m = ensureLenMap(len);
+    if (!m.has(sig)) m.set(sig, []);
+    // avoid duplicates
+    const list = m.get(sig);
+    if (!list.includes(word)) list.push(word);
+    totalIndexed++;
+  }
+
+  // ----- Dictionary loading -----
+  function setDictStatus(text, cls='') {
+    dictStatusEl.textContent = text;
+    dictStatusEl.className = cls;
+  }
+
+  async function loadFromText(text) {
+    // Reset
+    index.clear(); totalIndexed = 0;
+
+    // Split by lines and index 2–6 letter words
+    const lines = text.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const w = normalizeWord(lines[i]);
+      if (w) addWordToIndex(w);
+    }
+    setDictStatus(`ready (${totalIndexed.toLocaleString()} words, len 2–6)`, 'ok');
+    // Trigger a search with current input
+    onInputChanged();
+  }
+
+  async function tryFetchDefault() {
+    setDictStatus('loading from assets/words.txt…');
+    try {
+      const r = await fetch('assets/words.txt', { cache: 'force-cache' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const text = await r.text();
+      await loadFromText(text);
+    } catch (e) {
+      console.warn(e);
+      setDictStatus('not found — upload a file', 'warn');
+    }
+  }
+
+  fileInput.addEventListener('change', async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setDictStatus('reading file…');
+    const text = await f.text();
+    await loadFromText(text);
+  });
+
+  tryFetchBtn.addEventListener('click', tryFetchDefault);
+
+  // Try auto-fetch on load:
+  tryFetchDefault();
+
+  // ----- Search -----
+  function sanitizeLetters(s) {
+    // allow spaces; take only A-Z; max 6 letters
+    const letters = (s || '')
+      .toLowerCase()
+      .replace(/[^a-z]/g, '')
+      .slice(0, LEN_MAX);
+    return letters;
+  }
+
+  function searchExact(letters) {
+    const len = letters.length;
+    if (len < LEN_MIN) return [];
+    const m = index.get(len);
+    if (!m) return [];
+    const sig = signature(letters);
+    const list = m.get(sig) || [];
+    // Some word lists include proper nouns or variants; we return unique words sorted
+    return [...new Set(list)].sort((a,b)=> a.localeCompare(b));
+  }
+
+  function renderResults(words) {
+    resultsEl.innerHTML = '';
+    countEl.textContent = words.length;
+    if (words.length === 0) {
+      const li = document.createElement('li');
+      li.textContent = '— no exact anagrams —';
+      li.className = 'muted';
+      resultsEl.appendChild(li);
+      return;
+    }
+    for (const w of words) {
+      const li = document.createElement('li');
+      li.textContent = w;
+      resultsEl.appendChild(li);
+    }
+  }
+
+  let inputTimer = null;
+  function onInputChanged() {
+    const letters = sanitizeLetters(lettersEl.value);
+    // reformat field with spaced groups for clarity (e.g., t a r e s)
+    lettersEl.value = letters.split('').join(' ');
+    // debounce a hair
+    clearTimeout(inputTimer);
+    inputTimer = setTimeout(() => {
+      const words = searchExact(letters);
+      renderResults(words);
+    }, 60);
+  }
+
+  lettersEl.addEventListener('input', onInputChanged);
+  clearBtn.addEventListener('click', () => {
+    lettersEl.value = '';
+    onInputChanged();
+    lettersEl.focus();
+  });
+
+})();
+</script>
+</body>
+</html>
